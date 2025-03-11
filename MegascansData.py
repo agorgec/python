@@ -31,6 +31,7 @@ def set_megascans_data(node, library_path):
 
             # Construct the asset path using provided library structure
             asset_path = Path(library_path) / "Downloaded" / "/".join(data["path"])
+            preview_image_path = asset_path / data["preview"][-1]
 
             # Resolve asset textures, LODs, and formats
             asset_textures, asset_lods, asset_formats = resolve_assets(
@@ -46,6 +47,7 @@ def set_megascans_data(node, library_path):
                 "formats": asset_formats,
                 "lods": asset_lods,
                 "textures": asset_textures,
+                "preview": preview_image_path.as_posix(),
                 "tags": data["tags"],
             }
 
@@ -54,6 +56,7 @@ def set_megascans_data(node, library_path):
 
     # Store asset data as user data on the node and update parameters
     set_user_data(node, megascans_data)
+    Utilities.show_background_image(node)
     dump_info(node, megascans_data)
     node.cook(force=True)  # Recompute the node with new data
 

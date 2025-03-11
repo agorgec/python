@@ -1,14 +1,17 @@
 import hou
 from importlib import reload
 import MegascansData
+import Build
 
 reload(MegascansData)
+reload(Build)
 
-# Get the current Houdini node (pwd refers to 'print working directory')
+# Get the current Houdini node
 node = hou.pwd()
 
-# Evaluate the parameter 'library_path' on the node, which likely points to the asset library
+# Evaluate the parameter 'library_path'
 library_path = node.parm("library_path").evalAsString()
 
-# Initialize the MegascansData object and retrieve the data dictionary
+# Initialize the MegascansData
 MegascansData.set_megascans_data(node, library_path)
+Build.load_asset(node)
