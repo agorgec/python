@@ -57,7 +57,7 @@ def set_megascans_data(node, library_path):
     # Store asset data as user data on the node and update parameters
     set_user_data(node, megascans_data)
     Utilities.show_background_image(node)
-    dump_info(node, megascans_data)
+    Utilities.dump_info(node, megascans_data)
     node.cook(force=True)  # Recompute the node with new data
 
 
@@ -268,22 +268,3 @@ def set_user_data(node, megascans_data):
     if megascans_data:
         user_data = json.dumps(megascans_data, indent=4)
         node.setUserData("megascans_user_data", user_data)
-
-
-def dump_info(node, megascans_data):
-    info_parm = node.parm("asset_info")
-    info_parm.lock(False)
-    current_parms_dict = Utilities.current_parms_eval(node)
-
-    if megascans_data:
-        current_asset = current_parms_dict["megascans_asset"]
-        asset_metadata = megascans_data[current_asset]
-        node.parm("has_high").set(0)
-
-        if "high" in [x.lower() for x in asset_metadata["lods"]]:
-            node.parm("has_high").set(1)
-        info_parm.set(json.dumps(asset_metadata, indent=4))
-        info_parm.lock(True)
-
-    else:
-        info_parm.set("")

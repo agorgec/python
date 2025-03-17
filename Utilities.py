@@ -18,6 +18,7 @@ def current_parms_eval(node):
         # Dictionary mapping parameter names to their attribute names
         parms_to_eval = {
             "megascans_asset": "",
+            "batch_asset": "",
             "file_format": "",
             "render_geo": "",
             "proxy_geo": "",
@@ -51,6 +52,8 @@ def open_explorer(kwargs):
 
     current_parms_dict = current_parms_eval(node)
     current_asset = current_parms_dict["megascans_asset"]
+    if node.parm("enable_batch_process").eval():
+        current_asset = current_parms_dict["batch_asset"]
 
     if user_data:
         # Extract the asset path from the user data
@@ -79,38 +82,47 @@ def find_id(kwargs):
     """
     node = kwargs["node"]
     # Get the search ID entered by the user
-    search_id = node.parm("batch_ids").eval()
+    search_parm = node.parm("batch_ids").eval()
 
     # Get the 'megascans_asset' parameter and its available options (menu labels)
-    assets_parm = node.parm("megascans_asset")
+    batch_menu = node.parm("batch_asset")
+    assets_menu = node.parm("megascans_asset")
+    batch_ids = node.parm("batch_ids")
+    batch_assets = []
 
-    if len(search_id) > 0:
+    if len(search_parm) > 0:
         # Search for an asset whose ID matches the entered search ID
-        menu_labels = assets_parm.menuLabels()
-        matched_asset = [
-            item for item in menu_labels if search_id == item.split("::")[-1]
-        ]
+        for asset_id in search_parm.split():
+            menu_labels = assets_menu.menuLabels()
+            matched_asset = [
+                asset_id for item in menu_labels if asset_id == item.split("::")[-1]
+            ]
 
-        if matched_asset:
-            # Set the parameter to the found asset's menu index
-            menu_index = menu_labels.index(matched_asset[0])
-            assets_parm.set(menu_index)
-            assets_parm.pressButton()  # Press the button to refresh the node with the new asset
-        else:
-            # Display a message if no matching asset was found
-            hou.ui.displayMessage("Search ID is not found in menu labels!")
+            if matched_asset:
+                # Set the parameter to the found asset's menu index
+                batch_assets.append(matched_asset[0])
+            else:
+                # Display a message if no matching asset was found
+                hou.ui.displayMessage(f"{asset_id} is not found in menu labels!")
+
+        batch_ids.set(" ".join(batch_assets))
+        batch_menu.pressButton()  # Press the button to refresh the node with the new asset
+    # batch_menu.revertToDefaults()  # Revert to default value to avoid parameter lock
+    node.cook(force=True)  # Recompute the node with new data
 
 
 def get_asset_preview(node):
     """Fetches the preview image path for the currently selected Megascans asset."""
     user_data = node.userDataDict().get("megascans_user_data")
+    preview = None
 
-    if not user_data:
-        return None
+    if user_data:
 
-    current_parms_dict = current_parms_eval(node)
-    current_asset = current_parms_dict.get("megascans_asset")
-    preview = json.loads(user_data).get(current_asset, {}).get("preview")
+        current_parms_dict = current_parms_eval(node)
+        current_asset = current_parms_dict.get("megascans_asset")
+        if node.parm("enable_batch_process").eval():
+            current_asset = current_parms_dict["batch_asset"]
+        preview = json.loads(user_data).get(current_asset, {}).get("preview")
 
     asset_metadata = node.parm("asset_info").evalAsString()
     if not asset_metadata:
@@ -157,8 +169,6 @@ def show_background_image(node):
     Adds or removes a background image in the NetworkEditor
     based on the 'show_background_image' parameter.
     """
-    if not get_asset_preview(node):
-        return None
 
     preview, old_preview = get_asset_preview(node)
     panes = find_network_editors(node)
@@ -167,7 +177,35 @@ def show_background_image(node):
         for pane in panes:
             if old_preview:
                 remove_background_image(pane, old_preview)
-            add_background_image(pane, node, preview)
+            if preview:
+                add_background_image(pane, node, preview)
     else:
         for pane in panes:
             remove_background_image(pane, preview)
+
+
+# def set_work_items(node, batch_ids):
+#     generator = hou.node(node.path() + "/topnet/batch_ids")
+#     generator.parm("stringvalues").set(len(batch_ids))
+#     for index, asset_id in enumerate(batch_ids):
+#         generator.parm(f"stringvalue{index+1}").set(asset_id)
+
+
+def dump_info(node, megascans_data):
+    info_parm = node.parm("asset_info")
+    info_parm.lock(False)
+    current_parms_dict = current_parms_eval(node)
+    if megascans_data:
+        current_asset = current_parms_dict["megascans_asset"]
+        if node.parm("enable_batch_process").eval():
+            current_asset = current_parms_dict["batch_asset"]
+        asset_metadata = megascans_data[current_asset]
+        node.parm("has_high").set(0)
+
+        if "high" in [x.lower() for x in asset_metadata["lods"]]:
+            node.parm("has_high").set(1)
+        info_parm.set(json.dumps(asset_metadata, indent=4))
+        info_parm.lock(True)
+
+    else:
+        info_parm.set("")
