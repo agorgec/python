@@ -1,118 +1,146 @@
-import os
-import re
+import os, re, json
 from pathlib import Path
 from importlib import reload
-import json
 import Utilities
 
 reload(Utilities)
 
 
-def set_megascans_data(node, library_path):
+def set_megascans_data(kwargs, library_path):
     """
-    Loads asset data from a Megascans asset library, processes it, and sets user data on the node.
+    Loads Megascans asset metadata from a JSON file and assigns it to the given Houdini node.
 
     Args:
-        node: Houdini node where processed asset data will be stored.
-        library_path (str or Path): Path to the Megascans asset library.
+        node (hou.Node): The Houdini node to store asset metadata and trigger updates.
+        library_path (str or Path): The root path of the Megascans library.
+
+    Returns:
+        None
     """
+    # Define the path to the JSON file containing downloaded asset metadata
     assets_data_path = Path(library_path) / "Downloaded" / "assetsData.json"
+
+    # Dictionary to store processed Megascans asset metadata
     megascans_data = {}
 
-    # Check if the asset data JSON file exists
+    # Check if the asset metadata file exists
     if os.path.isfile(assets_data_path):
+        # Open and read the asset data JSON file
         with open(assets_data_path, "r", encoding="utf-8") as file:
-            assets_data = json.load(file)
+            assets_data = json.load(file)  # Load asset data into a dictionary
 
+        # Iterate over each asset entry in the JSON data
         for data in assets_data:
-            asset_name = "_".join(data["name"].split())  # Normalize asset name
-            asset_type = data["type"]
-            asset_id = data["id"]
+            # Normalize asset name by replacing spaces with underscores
+            asset_name = "_".join(data["name"].split())
+            asset_type = data[
+                "type"
+            ]  # Asset type (e.g., 3D, surface, vegetation, etc.)
+            asset_id = data["id"]  # Unique identifier for the asset
 
-            # Construct the asset path using provided library structure
+            # Construct the asset's directory path
             asset_path = Path(library_path) / "Downloaded" / "/".join(data["path"])
+
+            # Get the path to the preview image (last item in the 'preview' list)
             preview_image_path = asset_path / data["preview"][-1]
 
-            # Resolve asset textures, LODs, and formats
+            # Retrieve asset-related metadata such as textures, LODs, and formats
             asset_textures, asset_lods, asset_formats = resolve_assets(
                 asset_type, asset_id, asset_path
             )
 
-            # Create metadata dictionary for the asset
+            # Create a metadata dictionary for the asset
             metadata = {
-                "name": asset_name,
-                "id": asset_id,
-                "path": asset_path.as_posix(),
-                "type": asset_type,
-                "formats": asset_formats,
-                "lods": asset_lods,
-                "textures": asset_textures,
-                "preview": preview_image_path.as_posix(),
-                "tags": data["tags"],
+                "name": asset_name,  # Normalized asset name
+                "id": asset_id,  # Unique asset identifier
+                "path": asset_path.as_posix(),  # Convert path to a POSIX string
+                "type": asset_type,  # Type of asset
+                "formats": asset_formats,  # Supported file formats
+                "lods": asset_lods,  # Level of details (LODs)
+                "textures": asset_textures,  # Texture file paths
+                "preview": preview_image_path.as_posix(),  # Preview image path
+                "tags": data["tags"],  # Asset tags for categorization
             }
 
-            # Store metadata in a dictionary with a unique key
+            # Store the metadata in the dictionary with a unique key format
             megascans_data[f"{asset_type}::{asset_name}::{asset_id}"] = metadata
 
-    # Store asset data as user data on the node and update parameters
-    set_user_data(node, megascans_data)
-    Utilities.show_background_image(node)
-    Utilities.dump_info(node, megascans_data)
-    node.cook(force=True)  # Recompute the node with new data
+    # Store the processed Megascans data in the node's user data
+    set_user_data(kwargs, megascans_data)
+
+    # Display a preview image as a background in the Houdini node
+    Utilities.show_background_image(kwargs)
+
+    # Dump asset information for debugging or logging purposes
+    Utilities.dump_info(kwargs, megascans_data)
+
+    # Force the Houdini node to re-cook (recompute) with updated data
+    kwargs["node"].cook(force=True)
 
 
 def resolve_assets(asset_type, asset_id, asset_path):
     """
-    Resolves asset textures, LODs, and formats based on asset type.
+    Resolves asset metadata such as textures, LODs, and formats based on asset type.
 
     Args:
-        asset_type (str): Type of the asset (e.g., "3d" or "3dplant").
+        asset_type (str): The type of the asset (e.g., "3d", "3dplant").
         asset_id (str): Unique identifier of the asset.
-        asset_path (str or Path): Path to the asset's directory.
+        asset_path (str or Path): The directory path where the asset is stored.
 
     Returns:
-        tuple: (textures_dict, lods_dict, formats_list) containing:
-            - textures_dict (dict): Texture paths and metadata.
-            - lods_dict (dict): Level of Detail (LOD) file paths.
-            - formats_list (list): List of file formats present.
+        tuple: A tuple containing:
+            - asset_textures (dict): Texture file paths.
+            - asset_lods (list): Available levels of detail (LODs).
+            - asset_formats (list): Supported file formats.
     """
-    if asset_type in ("3d", "3dplant"):
-        # Load asset metadata from JSON file
-        with open(f"{asset_path}/{asset_id}.json", "r", encoding="utf-8") as file:
-            asset_data = json.load(file)
+    # Define the path to the asset's metadata JSON file
+    asset_metadata_path = Path(asset_path) / f"{asset_id}.json"
 
-        if asset_type == "3d":
-            # Resolve 3D asset textures and LODs
-            asset_textures = resolve_3d_tx(asset_path, asset_data)
-            asset_lods, asset_formats = resolve_3d(asset_path, asset_data)
-        else:
-            # Resolve 3D plant asset textures and LODs
-            asset_textures = resolve_3dplant_tx(asset_path, asset_data)
-            asset_lods, asset_formats = resolve_3dplant(asset_path, asset_data)
+    # Check if the metadata file exists before attempting to open it
+    if not asset_metadata_path.exists():
+        raise FileNotFoundError(f"Metadata file not found: {asset_metadata_path}")
 
-        return asset_textures, asset_lods, asset_formats
+    # Open and read the asset metadata JSON file
+    with asset_metadata_path.open("r", encoding="utf-8") as file:
+        asset_data = json.load(file)  # Load asset metadata
+
+    # Process the asset based on its type
+    if asset_type == "3d":
+        # Resolve 3D asset textures, LODs, and formats
+        asset_textures = resolve_3d_tx(asset_path, asset_data)
+        asset_lods, asset_formats = resolve_3d(asset_path, asset_data)
+
+    elif asset_type == "3dplant":
+        # Resolve 3D plant asset textures, LODs, and formats
+        asset_textures = resolve_3dplant_tx(asset_path, asset_data)
+        asset_lods, asset_formats = resolve_3dplant(asset_path, asset_data)
+
+    else:
+        # Raise an error if the asset type is unsupported
+        raise ValueError(f"Unsupported asset type: {asset_type}")
+
+    return asset_textures, asset_lods, asset_formats
 
 
 def resolve_3d_tx(asset_path, asset_data):
     """
-    Resolves texture file paths for 3D assets by checking both maps and components.
+    Resolves texture data for 3D assets by checking texture maps and components.
 
     Args:
-        asset_path (str or Path): Path to the asset's directory.
-        asset_data (dict): Dictionary containing asset metadata.
+        asset_path (str or Path): The directory path where asset textures are stored.
+        asset_data (dict): Asset metadata containing texture map and component information.
 
     Returns:
-        dict: A dictionary mapping texture names to their types, color spaces,
-              and resolution-specific file paths.
+        dict: A dictionary mapping texture names to texture details.
     """
     asset_path_obj = Path(asset_path)
 
-    # Try resolving from maps first
+    # Try resolving textures using texture maps first
     tx_dict = resolve_3d_tx_maps(asset_path_obj, asset_data.get("maps", []))
-    if tx_dict:  # If texture maps exist, return early
+    if tx_dict:  # If texture maps are found, return early
         return tx_dict
 
-    # If no maps were found, try resolving from components
+    # Otherwise, try resolving using texture components
     return resolve_3d_tx_components(asset_path_obj, asset_data.get("components", []))
 
 
@@ -121,11 +149,11 @@ def resolve_3d_tx_maps(asset_path_obj, maps):
     Resolves texture maps for 3D assets.
 
     Args:
-        asset_path_obj (Path): Path object pointing to the asset directory.
-        maps (list): List of texture map metadata.
+        asset_path_obj (Path): The directory path where textures are stored.
+        maps (list): List of texture maps from the asset metadata.
 
     Returns:
-        dict: A dictionary mapping texture names to their paths, if found.
+        dict: A dictionary mapping texture names to their corresponding paths and attributes.
     """
     tx_dict = {}
 
@@ -137,7 +165,7 @@ def resolve_3d_tx_maps(asset_path_obj, maps):
         name = tx_map["name"]
         resolution = tx_map["resolution"]
 
-        # Initialize dictionary structure if the texture name is new
+        # Initialize texture entry if it doesn't exist
         tx_dict.setdefault(
             name,
             {
@@ -147,12 +175,12 @@ def resolve_3d_tx_maps(asset_path_obj, maps):
             },
         )
 
-        # Append the file path under the corresponding resolution
+        # Store texture paths grouped by resolution
         tx_dict[name]["resolution"].setdefault(resolution, []).append(
             file_path.as_posix()
         )
 
-    return tx_dict  # Return dictionary containing resolved maps
+    return tx_dict  # Return resolved texture dictionary
 
 
 def resolve_3d_tx_components(asset_path_obj, components):
@@ -160,11 +188,11 @@ def resolve_3d_tx_components(asset_path_obj, components):
     Resolves texture components for 3D assets.
 
     Args:
-        asset_path_obj (Path): Path object pointing to the asset directory.
-        components (list): List of texture component metadata.
+        asset_path_obj (Path): The directory path where textures are stored.
+        components (list): List of texture components from the asset metadata.
 
     Returns:
-        dict: A dictionary mapping component names to their texture paths.
+        dict: A dictionary mapping texture component names to their details.
     """
     tx_dict = {}
 
@@ -173,42 +201,51 @@ def resolve_3d_tx_components(asset_path_obj, components):
 
         for uri in component.get("uris", []):
             for resolution_data in uri.get("resolutions", []):
-                # Collect valid texture file paths
                 textures = [
                     (asset_path_obj / tx_format["uri"]).as_posix()
                     for tx_format in resolution_data.get("formats", [])
                     if (asset_path_obj / tx_format["uri"]).exists()
                 ]
-                if textures:  # Only store resolutions with valid textures
+                if textures:
                     texture_paths[resolution_data["resolution"]] = textures
 
-        if texture_paths:  # Store component only if it contains valid textures
+        if texture_paths:
             tx_dict[component["name"]] = {
                 "type": component["type"],
                 "colorSpace": component["colorSpace"],
                 "resolution": texture_paths,
             }
 
-    return tx_dict  # Return dictionary containing resolved components
+    return tx_dict
 
 
 def resolve_3d(asset_path, asset_data):
+    """
+    Resolves mesh data for 3D assets, including LODs and file formats.
+
+    Args:
+        asset_path (str or Path): The directory path where asset files are stored.
+        asset_data (dict): Asset metadata containing mesh information.
+
+    Returns:
+        tuple: A dictionary of LODs mapping to mesh paths and a list of supported formats.
+    """
     mesh_dict = {}
     formats = set()
 
-    # Choose the key to process: "meshes" or "models"
+    # Determine whether the asset contains "meshes" or "models"
     key = "meshes" if asset_data.get("meshes") else "models"
     if key not in asset_data:
         return mesh_dict, list(formats)
 
     for mesh in asset_data[key]:
-        # Handle both "uris" (list) and "uri" (single) structures
-        uris = mesh.get("uris") or [mesh]
+        uris = mesh.get("uris") or [mesh]  # Some meshes have multiple URIs
         for uri_data in uris:
             uri = uri_data["uri"]
             file_path = Path(asset_path) / uri
 
             if file_path.exists():
+                # Extract LOD level from filename (e.g., high, lod0, lod1)
                 lod_match = re.findall(r"(high|lod\d)", uri.lower())
                 if lod_match:
                     lod = lod_match[0].upper()
@@ -219,6 +256,16 @@ def resolve_3d(asset_path, asset_data):
 
 
 def resolve_3dplant_tx(asset_path, asset_data):
+    """
+    Resolves texture data for 3D plant assets.
+
+    Args:
+        asset_path (str or Path): The directory path where plant textures are stored.
+        asset_data (dict): Asset metadata containing texture map information.
+
+    Returns:
+        dict: A dictionary mapping texture names to their details.
+    """
     tx_dict = {}
 
     for tx_map in asset_data["maps"]:
@@ -243,6 +290,16 @@ def resolve_3dplant_tx(asset_path, asset_data):
 
 
 def resolve_3dplant(asset_path, asset_data):
+    """
+    Resolves mesh data for 3D plant assets, including LODs and file formats.
+
+    Args:
+        asset_path (str or Path): The directory path where plant models are stored.
+        asset_data (dict): Asset metadata containing model information.
+
+    Returns:
+        tuple: A dictionary of LODs mapping to model paths and a list of supported formats.
+    """
     mesh_dict = {}
     formats = set()
 
@@ -263,8 +320,22 @@ def resolve_3dplant(asset_path, asset_data):
     return mesh_dict, list(formats)
 
 
-def set_user_data(node, megascans_data):
+def set_user_data(kwargs, megascans_data):
+    """
+    Stores Megascans asset metadata as user data in a Houdini node.
+
+    Args:
+        node (hou.Node): The Houdini node where metadata will be stored.
+        megascans_data (dict): Dictionary containing Megascans asset metadata.
+
+    Returns:
+        None
+    """
+    # Remove existing Megascans user data if present
+    node = kwargs["node"]
     node.destroyUserData("megascans_user_data", must_exist=False)
+
+    # Store new Megascans data if available
     if megascans_data:
         user_data = json.dumps(megascans_data, indent=4)
         node.setUserData("megascans_user_data", user_data)

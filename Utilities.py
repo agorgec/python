@@ -4,7 +4,7 @@ import os
 import nodegraphutils
 
 
-def current_parms_eval(node):
+def current_parms_eval(kwargs):
     """
     Evaluate and store current node parameters for quick access.
 
@@ -12,13 +12,13 @@ def current_parms_eval(node):
     and resolution, and stores them as attributes for easy retrieval later.
     """
     # Retrieve the user data containing Megascans information
+    node = kwargs["node"]
     user_data = node.userDataDict().get("megascans_user_data")
 
     if user_data:
         # Dictionary mapping parameter names to their attribute names
         parms_to_eval = {
             "megascans_asset": "",
-            "batch_asset": "",
             "file_format": "",
             "render_geo": "",
             "proxy_geo": "",
@@ -50,7 +50,7 @@ def open_explorer(kwargs):
     node = kwargs["node"]
     user_data = node.userDataDict().get("megascans_user_data")
 
-    current_parms_dict = current_parms_eval(node)
+    current_parms_dict = current_parms_eval(kwargs)
     current_asset = current_parms_dict["megascans_asset"]
     if node.parm("enable_batch_process").eval():
         current_asset = current_parms_dict["batch_asset"]
@@ -111,17 +111,16 @@ def find_id(kwargs):
     node.cook(force=True)  # Recompute the node with new data
 
 
-def get_asset_preview(node):
+def get_asset_preview(kwargs):
     """Fetches the preview image path for the currently selected Megascans asset."""
+    node = kwargs["node"]
     user_data = node.userDataDict().get("megascans_user_data")
     preview = None
 
     if user_data:
 
-        current_parms_dict = current_parms_eval(node)
+        current_parms_dict = current_parms_eval(kwargs)
         current_asset = current_parms_dict.get("megascans_asset")
-        if node.parm("enable_batch_process").eval():
-            current_asset = current_parms_dict["batch_asset"]
         preview = json.loads(user_data).get(current_asset, {}).get("preview")
 
     asset_metadata = node.parm("asset_info").evalAsString()
@@ -133,7 +132,8 @@ def get_asset_preview(node):
     return preview, old_preview
 
 
-def find_network_editors(node):
+def find_network_editors(kwargs):
+    node = kwargs["node"]
     """Finds NetworkEditor panes displaying the node's parent."""
     return [
         pane
@@ -142,8 +142,9 @@ def find_network_editors(node):
     ]
 
 
-def add_background_image(pane, node, preview):
+def add_background_image(kwargs, pane, preview):
     """Adds the preview image as a background in the given NetworkEditor pane."""
+    node = kwargs["node"]
     bounds = hou.BoundingRect(-1, -1, 1, 1)
     bounds.translate(hou.Vector2(0.5, 1))  # Position adjustment
 
@@ -164,41 +165,35 @@ def remove_background_image(pane, preview):
         nodegraphutils.saveBackgroundImages(pane.pwd(), images)
 
 
-def show_background_image(node):
+def show_background_image(kwargs):
     """
     Adds or removes a background image in the NetworkEditor
     based on the 'show_background_image' parameter.
     """
 
-    preview, old_preview = get_asset_preview(node)
-    panes = find_network_editors(node)
+    node = kwargs["node"]
+    preview, old_preview = get_asset_preview(kwargs)
+    panes = find_network_editors(kwargs)
 
     if node.parm("show_background_image").eval():
         for pane in panes:
             if old_preview:
                 remove_background_image(pane, old_preview)
             if preview:
-                add_background_image(pane, node, preview)
+                add_background_image(kwargs, pane, preview)
     else:
         for pane in panes:
             remove_background_image(pane, preview)
 
 
-# def set_work_items(node, batch_ids):
-#     generator = hou.node(node.path() + "/topnet/batch_ids")
-#     generator.parm("stringvalues").set(len(batch_ids))
-#     for index, asset_id in enumerate(batch_ids):
-#         generator.parm(f"stringvalue{index+1}").set(asset_id)
-
-
-def dump_info(node, megascans_data):
+def dump_info(kwargs, megascans_data):
+    node = kwargs["node"]
     info_parm = node.parm("asset_info")
     info_parm.lock(False)
-    current_parms_dict = current_parms_eval(node)
+    info_parm.revertToDefaults()
+    current_parms_dict = current_parms_eval(kwargs)
     if megascans_data:
         current_asset = current_parms_dict["megascans_asset"]
-        if node.parm("enable_batch_process").eval():
-            current_asset = current_parms_dict["batch_asset"]
         asset_metadata = megascans_data[current_asset]
         node.parm("has_high").set(0)
 
@@ -206,6 +201,36 @@ def dump_info(node, megascans_data):
             node.parm("has_high").set(1)
         info_parm.set(json.dumps(asset_metadata, indent=4))
         info_parm.lock(True)
+        return asset_metadata
 
+    return None
+
+
+def dirty_tx_pdg(node):
+    node.parm("stringvalues").set(0)
+    node.parm("dictattribs").set(0)
+    topnet = hou.node(f"{node.path()}/topnet_convert_tx")
+    topnet.dirtyAllWorkItems(remove_outputs=False)
+
+
+def cook_tx_pdg(node):
+    topnet = hou.node(f"{node.path()}/topnet_convert_tx")
+    topnet.cookOutputWorkItems()
+
+
+def switch_process_mode(kwargs):
+    node = kwargs["node"]
+    process_mode = kwargs["parm"].eval()
+    assets_parm = node.parm("megascans_asset")
+    pdg_index = node.parm("pdg_index")
+
+    if process_mode == 1:
+        assets_parm.set(pdg_index)
+        assets_parm.lock(True)
+        assets_parm.disable(True)
     else:
-        info_parm.set("")
+        assets_parm.disable(False)
+        assets_parm.lock(False)
+        assets_parm.deleteAllKeyframes()
+    node.cook(force=True)
+    assets_parm.pressButton()

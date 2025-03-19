@@ -9,72 +9,126 @@ reload(Utilities)
 
 
 def build_asset(kwargs):
+    node = kwargs["node"]
+    parm_name = kwargs["parm"].name()
+    Utilities.dirty_tx_pdg(node)
+    if (
+        parm_name == "megascans_asset"
+        or parm_name == "get_path"
+        or parm_name == "library_path"
+    ):
+        Utilities.show_background_image(kwargs)
+        build_geo(kwargs)
+        build_materials(kwargs)
+
+    if parm_name == "load_original" or parm_name == "file_format":
+        build_geo(kwargs)
+
+    if node.parm("dictattribs").eval():
+        Utilities.cook_tx_pdg(node)
+
+    # node.cook(force=True)
+
+
+def build_geo(kwargs):
     """
-    Load the asset's geometry files based on LOD settings and set asset-specific parameters.
+    Configures a Houdini node by setting asset file paths and related parameters.
 
     Args:
-        node (hou.Node): Houdini node containing Megascans asset data.
+        kwargs (dict): A dictionary containing node-related arguments,
+                       including the Houdini node reference.
+
+    Returns:
+        None
     """
 
     def get_filtered_files(lod_list, file_format):
+        """
+        Filters a list of asset files based on the specified format.
+
+        Args:
+            lod_list (list): List of file paths corresponding to a specific LOD.
+            file_format (str): The desired file format (e.g., 'abc', 'fbx').
+
+        Returns:
+            list: A list of file paths that match the specified file format.
+        """
         return [file for file in lod_list if file.endswith(f".{file_format}")]
 
-    def set_geo_loader_params(loader, files):
-        loader.parm("files").set(len(files))
+    def set_geo_loader_params(node, geo_type, files):
+        """
+        Sets the parameters of the geometry loader node with the given asset files.
+
+        Args:
+            node (hou.Node): The Houdini node where parameters will be set.
+            geo_type (str): Specifies whether the files are for "render" or "proxy" geometry.
+            files (list): List of asset file paths to set.
+
+        Returns:
+            None
+        """
+        node.parm(f"{geo_type}_files").set(len(files))  # Set file count parameter
+
         for index, file in enumerate(files):
-            file_parm = loader.parm(f"filelist{index + 1}")
+            file_parm = node.parm(f"{geo_type}_filelist{index + 1}")
+
+            # Only update if the parameter value is different
             if file_parm.evalAsString() != file:
                 file_parm.set(file)
 
+    # Retrieve the Houdini node from the provided arguments
     node = kwargs["node"]
-    if not node.userDataDict().get("megascans_user_data"):
+
+    # Load Megascans metadata from the node's user data
+    megascans_json = node.userDataDict().get("megascans_user_data")
+
+    if not megascans_json:  # Check if it's None or empty
         return
 
-    megascans_user_data = json.loads(node.userDataDict().get("megascans_user_data"))
-    Utilities.dump_info(node, megascans_user_data)
+    megascans_data = json.loads(megascans_json)
+    if not megascans_data:
+        return
 
-    render_geo_loader = hou.node("./sopnet/asset_loader_render")
-    render_format_switch = hou.node("./sopnet/render_format_switch")
-    proxy_geo_loader = hou.node("./sopnet/asset_loader_proxy")
-    get_var = hou.node("./sopnet/get_var")
+    # Configure batch size for processing
+    batch_size = set_batch_size(kwargs, megascans_data)
 
-    current_parms = Utilities.current_parms_eval(node)
-    asset_info = json.loads(node.parm("asset_info").evalAsString())
-    file_format = current_parms["file_format"]
+    if node.parm("enable_batch_process").eval() == 0 or batch_size > 0:
 
-    get_asset_size(node)
+        asset_info = Utilities.dump_info(kwargs, megascans_data)
 
-    # Load Render Geometry
-    render_lod = (
-        "HIGH"
-        if node.parm("load_original").eval() == 1
-        and not node.parm("load_original").isDisabled()
-        else current_parms["render_geo"]
-    )
+        # Extract asset metadata
+        asset_name = asset_info["name"]
+        asset_id = asset_info["id"]
 
-    render_geo_files = get_filtered_files(asset_info["lods"][render_lod], file_format)
-    set_geo_loader_params(render_geo_loader, render_geo_files)
+        # Get the current Houdini node parameters
+        current_parms = Utilities.current_parms_eval(kwargs)
+        file_format = current_parms["file_format"]
 
-    # Set render format switch
-    render_format_switch.parm("input").set(0 if file_format == "abc" else 1)
+        # Determine the appropriate level of detail (LOD) for rendering
+        render_lod = (
+            "HIGH"
+            if node.parm("load_original").eval() == 1
+            and not node.parm("load_original").isDisabled()
+            else current_parms["render_geo"]
+        )
 
-    # Load Proxy Geometry
-    proxy_geo_files = get_filtered_files(
-        asset_info["lods"][current_parms["proxy_geo"]], file_format
-    )
-    set_geo_loader_params(proxy_geo_loader, proxy_geo_files)
+        # Retrieve and filter render geometry files based on the format
+        render_geo_files = get_filtered_files(
+            asset_info["lods"][render_lod], file_format
+        )
+        set_geo_loader_params(node, "render", render_geo_files)
 
-    # Set asset parameters
-    current_asset = current_parms["megascans_asset"]
-    print(node.parm("enable_batch_process").eval())
-    if node.parm("enable_batch_process").eval():
-        current_asset = current_parms["batch_asset"]
-    node.parm("asset_name").set("_".join(current_asset.split("::")[1:]))
-    node.parm("has_var").set(get_var.geometry().attribValue("has_var"))
+        # Retrieve and filter proxy geometry files based on the format
+        proxy_geo_files = get_filtered_files(
+            asset_info["lods"][current_parms["proxy_geo"]], file_format
+        )
+        set_geo_loader_params(node, "proxy", proxy_geo_files)
 
-    var_num = get_var.geometry().attribValue("var_num") + 1
-    node.parm("var_num_message").set(f" Number of Variants: {var_num}")
-    node.parm("var_num").set(var_num)
+        # Set the format switch parameter (0 for 'abc', 1 for others)
+        node.parm("format_switch").set(0 if file_format == "abc" else 1)
+
+        # Set the asset name parameter using asset name and ID
+        node.parm("asset_name").set(f"{asset_name}_{asset_id}")
 
 
 def build_materials(kwargs):
@@ -84,30 +138,23 @@ def build_materials(kwargs):
     Args:
         node (hou.Node): Houdini node containing Megascans asset data.
     """
-    node = kwargs["node"]
-    clean_material_library(node)
-    create_matlib_content(node)
-    textures = get_textures(node)
-    missing_tx(node, textures)
+    node = kwargs["node"]  # Load Megascans metadata from the node's user data
+    megascans_json = node.userDataDict().get("megascans_user_data")
 
+    if not megascans_json:  # Check if it's None or empty
+        return
 
-def get_matlib(node):
-    """
-    Get the path to the material library.
-    """
-    return hou.node(node.path() + "/material_library")
-
-
-def clean_material_library(node):
-    """
-    Remove all materials from the material library.
-    """
-    matlib = get_matlib(node)
+    megascans_data = json.loads(megascans_json)
+    if not megascans_data:
+        return
+    matlib = hou.node(node.path() + "/material_library")
     matlib.deleteItems(matlib.children())
+    create_matlib_content(kwargs)
 
 
-def create_matlib_content(node):
-    matlib = get_matlib(node)
+def create_matlib_content(kwargs):
+    node = kwargs["node"]
+    matlib = hou.node(node.path() + "/material_library")
     kma_shader = voptoolutils._setupMtlXBuilderSubnet(
         destination_node=matlib,
         name="kma_shader",
@@ -127,43 +174,68 @@ def create_matlib_content(node):
     collect.setInput(2, kma_shader, 2)
 
     matlib.layoutChildren(horizontal_spacing=2)
-    create_image_files(node, kma_shader)
+    create_image_files(kwargs, kma_shader)
 
 
-def get_asset_size(node):
+def set_batch_size(kwargs, megascans_data):
+    node = kwargs["node"]
     batch_process = node.parm("enable_batch_process").eval()
+    batch_size_parm = node.parm("stringvalues")
+    batch_size_parm.set(0)
+
     if batch_process:
-        batch_ids = node.parm("batch_ids").evalAsString().split()
-        node.parm("stringvalues").set(len(batch_ids))
-        for index, batch_id in enumerate(batch_ids):
-            node.parm(f"stringvalue{index + 1}").set(batch_id)
-    else:
-        current_parms = Utilities.current_parms_eval(node)
-        current_asset = current_parms["megascans_asset"]
-        asset_id = current_asset.split("::")[-1]
-        node.parm("stringvalues").set(1)
-        node.parm("stringvalue1").set(asset_id)
+        asset_ids = set(node.parm("batch_ids").evalAsString().split())
+
+        if not asset_ids:  # No need to proceed if asset_ids is empty
+            return 0
+
+        filtered_ids = [
+            asset.lower().split("::")[-1]
+            for asset in megascans_data
+            if asset.lower().split("::")[-1] in asset_ids
+        ]
+
+        batch_size = len(filtered_ids)
+        batch_size_parm.set(batch_size)
+
+        for index, asset_id in enumerate(filtered_ids, start=1):
+            node.parm(f"stringvalue{index}").set(asset_id)
+
+        return batch_size
+
+    current_parms = Utilities.current_parms_eval(kwargs)
+    current_asset = current_parms["megascans_asset"]
+    asset_id = current_asset.split("::")[-1]
+
+    batch_size_parm.set(1)
+    node.parm("stringvalue1").set(asset_id)
+
+    return 1
 
 
-def missing_tx(node, textures=[]):
-    if not textures:
-        textures = get_textures(node)
-    to_generate = {}
-    for tx in textures:
-        rat_file = os.path.splitext(tx[1])[0] + ".rat"
-        if not os.path.exists(rat_file):
-            to_generate[tx[0]] = tx[1]
+def filter_tx_file(texture):
+    # node = kwargs["node"]
+    # if not textures:
+    #     textures = get_textures(kwargs)
+    # to_generate = {}
+    # for tx in textures:
+    # rat_file = os.path.splitext(tx[1])[0] + ".rat"
+    rat_file = os.path.splitext(texture)[0] + ".rat"
+    if not os.path.exists(rat_file):
+        return texture
+        # to_generate[tx[0]] = tx[1]
+    return rat_file
 
-    node.parm("dictattribs").set(0)
-    if to_generate:
-        node.parm("dictattribs").set(1)
-        node.parm("dictname1").set("textures")
-        node.parm("dictvalue1").set(json.dumps(to_generate))
+    # node.parm("dictattribs").set(0)
+    # if to_generate:
+    #     node.parm("dictattribs").set(1)
+    #     node.parm("dictname1").set("textures")
+    #     node.parm("dictvalue1").set(json.dumps(to_generate))
+    #     return to_generate
+    # return None
 
-        node.parm("_cook_controls_cookoutputnode").pressButton()
 
-
-def get_textures(node):
+def get_textures(kwargs):
     """
     Set the current textures for the asset based on resolution and LOD.
 
@@ -173,11 +245,12 @@ def get_textures(node):
     Returns:
         list: A list of tuples containing texture type, file path, and colorspace.
     """
+    node = kwargs["node"]
     textures_dict = json.loads(node.parm("asset_info").evalAsString())["textures"]
-    # auto_tx = self.utilities.node.parm("auto_tx").eval()
-    render_geo_lod = Utilities.current_parms_eval(node)["render_geo"]
-    current_res = Utilities.current_parms_eval(node)["resolution"]
+    render_geo_lod = Utilities.current_parms_eval(kwargs)["render_geo"]
+    current_res = Utilities.current_parms_eval(kwargs)["resolution"]
     current_textures = []
+    to_generate = {}
 
     # Loop through each texture type and select the appropriate resolution
     for tx_type, tx_type_values in textures_dict.items():
@@ -190,17 +263,27 @@ def get_textures(node):
         exr_file = os.path.splitext(found_tx)[0] + ".exr"
         if os.path.exists(exr_file):
             found_tx = exr_file
-        #     # Automatically convert textures if auto_tx is enabled
-        #     if auto_tx:
-        #         self.convert_textures(found_tx)
+
+        if filter_tx_file(found_tx) == found_tx:
+            to_generate[tx_type] = found_tx
+        else:
+            found_tx = filter_tx_file(found_tx)
 
         current_textures.append((tx_type, found_tx, tx_type_values["colorSpace"]))
+
+    node.parm("dictattribs").set(0)
+
+    if to_generate:
+        node.parm("dictattribs").set(1)
+        node.parm("dictname1").set("textures")
+        node.parm("dictvalue1").set(json.dumps(to_generate))
 
     return current_textures
 
 
-def create_image_files(node, shader):
-    textures = get_textures(node)
+def create_image_files(kwargs, shader):
+    node = kwargs["node"]
+    textures = get_textures(kwargs)
     surface = hou.node(shader.path() + "/mtlxstandard_surface")
     displacement = hou.node(shader.path() + "/mtlxdisplacement")
     not_used_textures = []
@@ -232,10 +315,10 @@ def create_image_files(node, shader):
         else:
             not_used_textures.append(tx_image)
 
-    clean_matnet(shader, not_used_textures)
+    layout_matnet(shader, not_used_textures)
 
 
-def clean_matnet(shader, not_used_textures):
+def layout_matnet(shader, not_used_textures):
     """
     Clean up the shader network by removing unused texture nodes and organizing the layout.
 
