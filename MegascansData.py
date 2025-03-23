@@ -77,6 +77,8 @@ def set_megascans_data(kwargs, library_path):
     # Force the Houdini node to re-cook (recompute) with updated data
     kwargs["node"].cook(force=True)
 
+    return megascans_data
+
 
 def resolve_assets(asset_type, asset_id, asset_path):
     """

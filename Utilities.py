@@ -1,7 +1,11 @@
 import hou
+from importlib import reload
+import Build
 import json
 import os
 import nodegraphutils
+
+reload(Build)
 
 
 def current_parms_eval(kwargs):
@@ -52,8 +56,6 @@ def open_explorer(kwargs):
 
     current_parms_dict = current_parms_eval(kwargs)
     current_asset = current_parms_dict["megascans_asset"]
-    if node.parm("enable_batch_process").eval():
-        current_asset = current_parms_dict["batch_asset"]
 
     if user_data:
         # Extract the asset path from the user data
@@ -85,7 +87,6 @@ def find_id(kwargs):
     search_parm = node.parm("batch_ids").eval()
 
     # Get the 'megascans_asset' parameter and its available options (menu labels)
-    batch_menu = node.parm("batch_asset")
     assets_menu = node.parm("megascans_asset")
     batch_ids = node.parm("batch_ids")
     batch_assets = []
@@ -106,7 +107,7 @@ def find_id(kwargs):
                 hou.ui.displayMessage(f"{asset_id} is not found in menu labels!")
 
         batch_ids.set(" ".join(batch_assets))
-        batch_menu.pressButton()  # Press the button to refresh the node with the new asset
+        assets_menu.pressButton()  # Press the button to refresh the node with the new asset
     # batch_menu.revertToDefaults()  # Revert to default value to avoid parameter lock
     node.cook(force=True)  # Recompute the node with new data
 
@@ -186,14 +187,16 @@ def show_background_image(kwargs):
             remove_background_image(pane, preview)
 
 
-def dump_info(kwargs, megascans_data):
+def dump_info(kwargs, megascans_data=None):
     node = kwargs["node"]
     info_parm = node.parm("asset_info")
     info_parm.lock(False)
     info_parm.revertToDefaults()
-    current_parms_dict = current_parms_eval(kwargs)
     if megascans_data:
+        current_parms_dict = current_parms_eval(kwargs)
         current_asset = current_parms_dict["megascans_asset"]
+        if current_asset == "-----":
+            return None
         asset_metadata = megascans_data[current_asset]
         node.parm("has_high").set(0)
 
@@ -207,8 +210,8 @@ def dump_info(kwargs, megascans_data):
 
 
 def dirty_tx_pdg(node):
-    node.parm("stringvalues").set(0)
-    node.parm("dictattribs").set(0)
+    node.parm("stringvalues").revertToDefaults()
+    node.parm("tx_dict").revertToDefaults()
     topnet = hou.node(f"{node.path()}/topnet_convert_tx")
     topnet.dirtyAllWorkItems(remove_outputs=False)
 
@@ -218,19 +221,26 @@ def cook_tx_pdg(node):
     topnet.cookOutputWorkItems()
 
 
+def generate_tx_pdg(node):
+    topnet = hou.node(f"{node.path()}/topnet_convert_tx")
+    topnet.generateStaticWorkItems()
+
+
 def switch_process_mode(kwargs):
     node = kwargs["node"]
-    process_mode = kwargs["parm"].eval()
-    assets_parm = node.parm("megascans_asset")
-    pdg_index = node.parm("pdg_index")
+    # process_mode = kwargs["parm"].eval()
+    # assets_parm = node.parm("megascans_asset")
+    # pdg_index = node.parm("pdg_index")
 
-    if process_mode == 1:
-        assets_parm.set(pdg_index)
-        assets_parm.lock(True)
-        assets_parm.disable(True)
-    else:
-        assets_parm.disable(False)
-        assets_parm.lock(False)
-        assets_parm.deleteAllKeyframes()
+    # if process_mode == 1:
+    #     assets_parm.set(pdg_index)
+    #     assets_parm.lock(True)
+    #     assets_parm.disable(True)
+    # else:
+    #     assets_parm.disable(False)
+    #     assets_parm.lock(False)
+    #     assets_parm.deleteAllKeyframes()
+    show_background_image(kwargs)
+    dump_info(kwargs)
+    Build.build_asset(kwargs)
     node.cook(force=True)
-    assets_parm.pressButton()

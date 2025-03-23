@@ -11,23 +11,52 @@ reload(Utilities)
 def build_asset(kwargs):
     node = kwargs["node"]
     parm_name = kwargs["parm"].name()
-    Utilities.dirty_tx_pdg(node)
-    if (
-        parm_name == "megascans_asset"
-        or parm_name == "get_path"
-        or parm_name == "library_path"
-    ):
+
+    # user_data = node.userDataDict().get("megascans_user_data")
+    # if not user_data:
+    #     return
+    # Utilities.dirty_tx_pdg(node)
+    current_asset = Utilities.current_parms_eval(kwargs)["megascans_asset"]
+
+    if current_asset == "-----":
+        return
+
+    # Define parameter groups that trigger specific actions
+    material_params = {
+        "megascans_asset",
+        "get_path",
+        "library_path",
+        "reload",
+        "enable_batch_process",
+        "code",
+    }
+    geo_params = {"load_original", "file_format", "proxy_geo", "render_geo"}
+
+    if parm_name in material_params:
         Utilities.show_background_image(kwargs)
         build_geo(kwargs)
         build_materials(kwargs)
+        # Utilities.generate_tx_pdg(node)
 
-    if parm_name == "load_original" or parm_name == "file_format":
+    elif parm_name in geo_params:
         build_geo(kwargs)
+        if parm_name == "render_geo":
+            build_materials(kwargs)
+        if parm_name == "proxy_geo":
+            node.parm("tx_dict").revertToDefaults()
 
-    if node.parm("dictattribs").eval():
+        # Utilities.generate_tx_pdg(node)
+
+    elif parm_name == "resolution":
+        build_materials(kwargs)
+        # Utilities.generate_tx_pdg(node)
+
+    # Force cook the node
+    node.cook(force=True)
+
+    # Cook TX PDG if necessary
+    if node.parm("enable_batch_process").eval() == 0:
         Utilities.cook_tx_pdg(node)
-
-    # node.cook(force=True)
 
 
 def build_geo(kwargs):
@@ -129,6 +158,11 @@ def build_geo(kwargs):
 
         # Set the asset name parameter using asset name and ID
         node.parm("asset_name").set(f"{asset_name}_{asset_id}")
+
+        index_node = hou.node(f"{node.path()}/sopnet/INDEX")
+        var_num = index_node.geometry().attribValue("max_index") + 1
+        node.parm("var_num_message").set(f"Number of Variants: {var_num}")
+        node.parm("var_num").set(var_num)
 
 
 def build_materials(kwargs):
@@ -271,12 +305,12 @@ def get_textures(kwargs):
 
         current_textures.append((tx_type, found_tx, tx_type_values["colorSpace"]))
 
-    node.parm("dictattribs").set(0)
+    node.parm("tx_dict").revertToDefaults()
 
     if to_generate:
-        node.parm("dictattribs").set(1)
-        node.parm("dictname1").set("textures")
-        node.parm("dictvalue1").set(json.dumps(to_generate))
+        # node.parm("dictattribs").set(1)
+        # node.parm("dictname1").set("textures")
+        node.parm("tx_dict").set(json.dumps(to_generate))
 
     return current_textures
 
