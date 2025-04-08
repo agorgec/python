@@ -1,83 +1,114 @@
-import os, re, json
-from pathlib import Path
 from importlib import reload
+import re
+import json
+import hashlib
+from pathlib import Path
 import Utilities
 
 reload(Utilities)
 
 
-def set_megascans_data(kwargs, library_path):
-    """
-    Loads Megascans asset metadata from a JSON file and assigns it to the given Houdini node.
+def init_hda(node):
+    megascans_user_data = set_megascans_user_data(node)
+    Utilities.show_background_image(node, megascans_user_data)
+    Utilities.dump_info(node, megascans_user_data)
+    node.cook(force=True)
 
-    Args:
-        node (hou.Node): The Houdini node to store asset metadata and trigger updates.
-        library_path (str or Path): The root path of the Megascans library.
 
-    Returns:
-        None
-    """
-    # Define the path to the JSON file containing downloaded asset metadata
-    assets_data_path = Path(library_path) / "Downloaded" / "assetsData.json"
+def set_megascans_user_data(node):
+    """Load and cache Megascans asset metadata into a Houdini node efficiently."""
+    current_paths = Utilities.get_current_paths(node)
 
-    # Dictionary to store processed Megascans asset metadata
+    # -- Load asset metadata if available and unchanged --
+    if cache_is_valid(
+        current_paths.assets_data_path,
+        current_paths.hash_path,
+        current_paths.user_data_path,
+    ):
+        return load_json(current_paths.user_data_path)
+
+    # -- Build metadata from scratch --
+    if not current_paths.assets_data_path.is_file():
+        return {}
+
+    with open(current_paths.assets_data_path, "r", encoding="utf-8") as f:
+        assets_data = json.load(f)
+
     megascans_data = {}
 
-    # Check if the asset metadata file exists
-    if os.path.isfile(assets_data_path):
-        # Open and read the asset data JSON file
-        with open(assets_data_path, "r", encoding="utf-8") as file:
-            assets_data = json.load(file)  # Load asset data into a dictionary
+    for data in assets_data:
+        asset_key, metadata = process_asset(data, current_paths.library_path)
+        megascans_data[asset_key] = metadata
 
-        # Iterate over each asset entry in the JSON data
-        for data in assets_data:
-            # Normalize asset name by replacing spaces with underscores
-            asset_name = "_".join(data["name"].split())
-            asset_type = data[
-                "type"
-            ]  # Asset type (e.g., 3D, surface, vegetation, etc.)
-            asset_id = data["id"]  # Unique identifier for the asset
-
-            # Construct the asset's directory path
-            asset_path = Path(library_path) / "Downloaded" / "/".join(data["path"])
-
-            # Get the path to the preview image (last item in the 'preview' list)
-            preview_image_path = asset_path / data["preview"][-1]
-
-            # Retrieve asset-related metadata such as textures, LODs, and formats
-            asset_textures, asset_lods, asset_formats = resolve_assets(
-                asset_type, asset_id, asset_path
-            )
-
-            # Create a metadata dictionary for the asset
-            metadata = {
-                "name": asset_name,  # Normalized asset name
-                "id": asset_id,  # Unique asset identifier
-                "path": asset_path.as_posix(),  # Convert path to a POSIX string
-                "type": asset_type,  # Type of asset
-                "formats": asset_formats,  # Supported file formats
-                "lods": asset_lods,  # Level of details (LODs)
-                "textures": asset_textures,  # Texture file paths
-                "preview": preview_image_path.as_posix(),  # Preview image path
-                "tags": data["tags"],  # Asset tags for categorization
-            }
-
-            # Store the metadata in the dictionary with a unique key format
-            megascans_data[f"{asset_type}::{asset_name}::{asset_id}"] = metadata
-
-    # Store the processed Megascans data in the node's user data
-    set_user_data(kwargs, megascans_data)
-
-    # Display a preview image as a background in the Houdini node
-    Utilities.show_background_image(kwargs)
-
-    # Dump asset information for debugging or logging purposes
-    Utilities.dump_info(kwargs, megascans_data)
-
-    # Force the Houdini node to re-cook (recompute) with updated data
-    kwargs["node"].cook(force=True)
+    # -- Save rebuilt metadata and hash --
+    save_json(current_paths.user_data_path, megascans_data)
+    save_hash(current_paths.assets_data_path, current_paths.hash_path)
 
     return megascans_data
+
+
+# ====================
+# 🔧 Utility Functions
+# ====================
+
+
+def calculate_hash_from_json(json_path: Path) -> str:
+    with open(json_path, "r", encoding="utf-8") as f:
+        data = json.load(f)
+    return hashlib.sha256(json.dumps(data, sort_keys=True).encode()).hexdigest()
+
+
+def cache_is_valid(data_path: Path, hash_path: Path, cache_path: Path) -> bool:
+    if not (data_path.exists() and hash_path.exists() and cache_path.exists()):
+        return False
+    current_hash = calculate_hash_from_json(data_path)
+    with open(hash_path, "r", encoding="utf-8") as f:
+        saved_hash = f.read()
+    return current_hash == saved_hash
+
+
+def save_hash(data_path: Path, hash_path: Path):
+    data_hash = calculate_hash_from_json(data_path)
+    with open(hash_path, "w", encoding="utf-8") as f:
+        f.write(data_hash)
+
+
+def save_json(path: Path, data: dict):
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(data, f, indent=4)
+
+
+def load_json(path: Path):
+    with open(path, "r", encoding="utf-8") as f:
+        return json.load(f)
+
+
+def process_asset(data: dict, library_path: Path):
+    asset_name = "_".join(data["name"].split())
+    asset_type = data["type"]
+    asset_id = data["id"]
+    asset_key = f"{asset_type}::{asset_name}::{asset_id}"
+
+    asset_path = library_path / "Downloaded" / "/".join(data["path"])
+    preview_image = asset_path / data["preview"][-1]
+
+    asset_textures, asset_lods, asset_formats = resolve_assets(
+        asset_type, asset_id, asset_path
+    )
+
+    metadata = {
+        "name": asset_name,
+        "id": asset_id,
+        "path": asset_path.as_posix(),
+        "type": asset_type,
+        "formats": asset_formats,
+        "lods": asset_lods,
+        "textures": asset_textures,
+        "preview": preview_image.as_posix(),
+        "tags": data["tags"],
+    }
+
+    return asset_key, metadata
 
 
 def resolve_assets(asset_type, asset_id, asset_path):
@@ -320,24 +351,3 @@ def resolve_3dplant(asset_path, asset_data):
                 mesh_dict[lod].extend([file_path.as_posix()])
 
     return mesh_dict, list(formats)
-
-
-def set_user_data(kwargs, megascans_data):
-    """
-    Stores Megascans asset metadata as user data in a Houdini node.
-
-    Args:
-        node (hou.Node): The Houdini node where metadata will be stored.
-        megascans_data (dict): Dictionary containing Megascans asset metadata.
-
-    Returns:
-        None
-    """
-    # Remove existing Megascans user data if present
-    node = kwargs["node"]
-    node.destroyUserData("megascans_user_data", must_exist=False)
-
-    # Store new Megascans data if available
-    if megascans_data:
-        user_data = json.dumps(megascans_data, indent=4)
-        node.setUserData("megascans_user_data", user_data)
